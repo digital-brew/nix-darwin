@@ -6,6 +6,7 @@ with lib;
 
 let
   cfg = config.nix.gc;
+  launchdTypes = import ../../launchd/types.nix { inherit config lib; };
 in
 
 {
@@ -24,27 +25,31 @@ in
       automatic = mkOption {
         default = false;
         type = types.bool;
-        description = lib.mdDoc "Automatically run the garbage collector at a specific time.";
+        description = "Automatically run the garbage collector at a specific time.";
       };
 
       # Not in NixOS module
       user = mkOption {
         type = types.nullOr types.str;
         default = null;
-        description = lib.mdDoc "User that runs the garbage collector.";
+        description = "User that runs the garbage collector.";
       };
 
       interval = mkOption {
-        type = types.attrs;
-        default = { Hour = 3; Minute = 15; };
-        description = lib.mdDoc "The time interval at which the garbage collector will run.";
+        type = launchdTypes.StartCalendarInterval;
+        default = [{ Weekday = 7; Hour = 3; Minute = 15; }];
+        description = ''
+          The calendar interval at which the garbage collector will run.
+          See the {option}`serviceConfig.StartCalendarInterval` option of
+          the {option}`launchd` module for more info.
+        '';
       };
 
       options = mkOption {
         default = "";
         example = "--max-freed $((64 * 1024**3))";
         type = types.str;
-        description = lib.mdDoc ''
+        description = ''
           Options given to {file}`nix-collect-garbage` when the
           garbage collector is run automatically.
         '';
@@ -63,7 +68,7 @@ in
       command = "${config.nix.package}/bin/nix-collect-garbage ${cfg.options}";
       environment.NIX_REMOTE = optionalString config.nix.useDaemon "daemon";
       serviceConfig.RunAtLoad = false;
-      serviceConfig.StartCalendarInterval = [ cfg.interval ];
+      serviceConfig.StartCalendarInterval = cfg.interval;
       serviceConfig.UserName = cfg.user;
     };
 

@@ -7,9 +7,11 @@ let
 
   cfg = config.nix.linux-builder;
 
-  builderWithOverrides = cfg.package.override {
-    modules = [ cfg.config ];
-  };
+  builderWithOverrides = cfg.package.override (previousArguments: {
+    # the linux-builder packages require a list `modules` argument, so it's
+    # always non-null.
+    modules = previousArguments.modules ++ [ cfg.config ];
+  });
 
   # create-builder uses TMPDIR to share files with the builder, notably certs.
   # macOS will clean up files in /tmp automatically that haven't been accessed in 3+ days.
@@ -33,13 +35,13 @@ in
   ];
 
   options.nix.linux-builder = {
-    enable = mkEnableOption (lib.mdDoc "Linux builder");
+    enable = mkEnableOption "Linux builder";
 
     package = mkOption {
       type = types.package;
       default = pkgs.darwin.linux-builder;
       defaultText = "pkgs.darwin.linux-builder";
-      description = lib.mdDoc ''
+      description = ''
         This option specifies the Linux builder to use.
       '';
     };
@@ -54,7 +56,7 @@ in
           environment.systemPackages = [ pkgs.neovim ];
         })
       '';
-      description = lib.mdDoc ''
+      description = ''
         This option specifies extra NixOS configuration for the builder. You should first use the Linux builder
         without changing the builder configuration otherwise you may not be able to build the Linux builder.
       '';
@@ -65,7 +67,7 @@ in
       default = [];
       defaultText = literalExpression ''[]'';
       example = literalExpression ''[ "big-parallel" ]'';
-      description = lib.mdDoc ''
+      description = ''
         A list of features mandatory for the Linux builder. The builder will
         be ignored for derivations that don't require all features in
         this list. All mandatory features are automatically included in
@@ -79,7 +81,7 @@ in
       type = types.ints.positive;
       default = 1;
       example = 4;
-      description = lib.mdDoc ''
+      description = ''
         The number of concurrent jobs the Linux builder machine supports. The
         build machine will enforce its own limits, but this allows hydra
         to schedule better since there is no work-stealing between build
@@ -94,7 +96,7 @@ in
       default = "ssh-ng";
       defaultText = literalExpression ''"ssh-ng"'';
       example = literalExpression ''"ssh"'';
-      description = lib.mdDoc ''
+      description = ''
         The protocol used for communicating with the build machine.  Use
         `ssh-ng` if your remote builder and your local Nix version support that
         improved protocol.
@@ -108,7 +110,7 @@ in
       type = types.ints.positive;
       default = 1;
       defaultText = literalExpression ''1'';
-      description = lib.mdDoc ''
+      description = ''
         The relative speed of the Linux builder. This is an arbitrary integer
         that indicates the speed of this builder, relative to other
         builders. Higher is faster.
@@ -122,7 +124,7 @@ in
       default = [ "kvm" "benchmark" "big-parallel" ];
       defaultText = literalExpression ''[ "kvm" "benchmark" "big-parallel" ]'';
       example = literalExpression ''[ "kvm" "big-parallel" ]'';
-      description = lib.mdDoc ''
+      description = ''
         A list of features supported by the Linux builder. The builder will
         be ignored for derivations that require features not in this
         list.
@@ -133,15 +135,17 @@ in
 
     systems = mkOption {
       type = types.listOf types.str;
-      default = [ "${stdenv.hostPlatform.uname.processor}-linux" ];
-      defaultText = literalExpression ''[ "''${stdenv.hostPlatform.uname.processor}-linux" ]'';
+      default = [ builderWithOverrides.nixosConfig.nixpkgs.hostPlatform.system ];
+      defaultText = ''
+        The `nixpkgs.hostPlatform.system` of the build machine's final NixOS configuration.
+      '';
       example = literalExpression ''
         [
           "x86_64-linux"
           "aarch64-linux"
         ]
       '';
-      description = lib.mdDoc ''
+      description = ''
         This option specifies system types the build machine can execute derivations on.
 
         This sets the corresponding `nix.buildMachines.*.systems` option.
@@ -152,29 +156,21 @@ in
     workingDirectory = mkOption {
       type = types.str;
       default = "/var/lib/darwin-builder";
-      description = lib.mdDoc ''
+      description = ''
         The working directory of the Linux builder daemon process.
       '';
     };
 
-    ephemeral = mkEnableOption (lib.mdDoc ''
+    ephemeral = mkEnableOption ''
       wipe the builder's filesystem on every restart.
 
       This is disabled by default as maintaining the builder's Nix Store reduces
       rebuilds. You can enable this if you don't want your builder to accumulate
       state.
-    '');
+    '';
   };
 
   config = mkIf cfg.enable {
-    assertions = [ {
-      assertion = config.nix.settings.trusted-users != [ "root" ] || (config.nix.settings.extra-trusted-users or [ ]) != [ ];
-      message = ''
-        Your user or group (@admin) needs to be added to `nix.settings.trusted-users` or `nix.settings.extra-trusted-users`
-        to use the Linux builder.
-      '';
-    } ];
-
     system.activationScripts.preActivation.text = ''
       mkdir -p ${cfg.workingDirectory}
     '';

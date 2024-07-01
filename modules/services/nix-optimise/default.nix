@@ -6,7 +6,6 @@
 
 let
   inherit (lib)
-    mdDoc
     mkIf
     mkOption
     mkRemovedOptionModule
@@ -15,6 +14,7 @@ let
     ;
 
   cfg = config.nix.optimise;
+  launchdTypes = import ../../launchd/types.nix { inherit config lib; };
 in
 
 {
@@ -31,20 +31,24 @@ in
       automatic = mkOption {
         type = types.bool;
         default = false;
-        description = mdDoc "Automatically run the nix store optimiser at a specific time.";
+        description = "Automatically run the nix store optimiser at a specific time.";
       };
 
       # Not in NixOS module
       user = mkOption {
         type = types.nullOr types.str;
         default = null;
-        description = mdDoc "User that runs the store optimisation.";
+        description = "User that runs the store optimisation.";
       };
 
       interval = mkOption {
-        type = types.attrs;
-        default = { Hour = 3; Minute = 15; };
-        description = mdDoc "The time interval at which the optimiser will run.";
+        type = launchdTypes.StartCalendarInterval;
+        default = [{ Weekday = 7; Hour = 4; Minute = 15; }];
+        description = ''
+          The calendar interval at which the optimiser will run.
+          See the {option}`serviceConfig.StartCalendarInterval` option of
+          the {option}`launchd` module for more info.
+        '';
       };
 
     };
@@ -64,7 +68,7 @@ in
           "/bin/wait4path ${config.nix.package} &amp;&amp; exec ${config.nix.package}/bin/nix-store --optimise"
         ];
         RunAtLoad = false;
-        StartCalendarInterval = [ cfg.interval ];
+        StartCalendarInterval = cfg.interval;
         UserName = cfg.user;
       };
     };
