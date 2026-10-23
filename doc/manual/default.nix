@@ -30,7 +30,7 @@ let
       declarations = map
         (decl:
           if lib.hasPrefix (toString prefix) (toString decl) then
-            gitHubDeclaration "LnL7" "nix-darwin" revision
+            gitHubDeclaration "nix-darwin" "nix-darwin" revision
               (lib.removePrefix "/"
                 (lib.removePrefix (toString prefix) (toString decl)))
           # TODO: handle this in a better way (may require upstream
@@ -53,7 +53,7 @@ in rec {
       substitute \
         ${optionsDoc.optionsJSON}/nix-support/hydra-build-products \
         $out/nix-support/hydra-build-products \
-        --replace \
+        --replace-fail \
           '${optionsDoc.optionsJSON}/share/doc/nixos' \
           "$out/share/doc/darwin"
     '';
@@ -74,22 +74,27 @@ in rec {
       cp -r ${pkgs.documentation-highlighter} $dst/highlightjs
 
       substitute ${./manual.md} manual.md \
-        --replace '@DARWIN_VERSION@' "${version}" \
-        --replace \
+        --replace-fail '@DARWIN_VERSION@' "${version}" \
+        --replace-fail \
           '@DARWIN_OPTIONS_JSON@' \
           ${optionsJSON}/share/doc/darwin/options.json
+
+      # Pass --redirects option if nixos-render-docs supports it
+      if nixos-render-docs manual html --help | grep --silent -E '^\s+--redirects\s'; then
+        redirects_opt="--redirects ${./redirects.json}"
+      fi
 
       # TODO: --manpage-urls?
       nixos-render-docs -j $NIX_BUILD_CORES manual html \
         --manpage-urls ${pkgs.writeText "manpage-urls.json" "{}"} \
         --revision ${lib.escapeShellArg revision} \
         --generator "nixos-render-docs ${lib.version}" \
+        $redirects_opt \
         --stylesheet style.css \
         --stylesheet highlightjs/mono-blue.css \
         --script ./highlightjs/highlight.pack.js \
         --script ./highlightjs/loader.js \
-        --toc-depth 1 \
-        --chunk-toc-depth 1 \
+        --sidebar-depth 1 \
         ./manual.md \
         $dst/index.html
 
@@ -118,18 +123,18 @@ in rec {
 
       # TODO: get these parameterized in upstream nixos-render-docs
       sed -i -e '
-        /^\.TH / s|NixOS|Darwin|g
+        /^\.TH / s|NixOS|nix-darwin|g
 
         /^\.SH "NAME"$/ {
           N
-          s|NixOS|Darwin|g
+          s|NixOS|nix-darwin|g
         }
 
         /^\.SH "DESCRIPTION"$/ {
           N; N
           s|/etc/nixos/configuration|configuration|g
-          s|NixOS|Darwin|g
-          s|nixos|darwin|g
+          s|NixOS|nix-darwin|g
+          s|nixos|nix-darwin|g
         }
 
         /\.SH "AUTHORS"$/ {

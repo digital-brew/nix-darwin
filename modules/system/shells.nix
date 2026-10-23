@@ -12,11 +12,17 @@ in
       type = types.listOf (types.either types.shellPackage types.path);
       default = [];
       example = literalExpression "[ pkgs.bashInteractive pkgs.zsh ]";
-      description = lib.mdDoc ''
+      description = ''
         A list of permissible login shells for user accounts.
-        No need to mention `/bin/sh`
-        and other shells that are available by default on
-        macOS.
+
+        The default macOS shells will be automatically included:
+          - /bin/bash
+          - /bin/csh
+          - /bin/dash
+          - /bin/ksh
+          - /bin/sh
+          - /bin/tcsh
+          - /bin/zsh
       '';
       apply = map (v: if types.shellPackage.check v then "/run/current-system/sw${v.shellPath}" else v);
     };

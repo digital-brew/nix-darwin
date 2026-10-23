@@ -8,6 +8,7 @@
    programs.zsh.enable = true;
    programs.zsh.enableCompletion = true;
    programs.zsh.enableBashCompletion = false;
+   programs.zsh.enableAutosuggestions = true;
 
    programs.zsh.shellInit = "source /etc/zshenv.d/*.conf";
    programs.zsh.interactiveShellInit = "source /etc/zshrc.d/*.conf";
@@ -22,8 +23,6 @@
 
      echo >&2 "checking setEnvironment in /etc/zshenv"
      fgrep '. ${config.system.build.setEnvironment}' ${config.out}/etc/zshenv
-     echo >&2 "checking nix-shell return /etc/zshenv"
-     grep 'if test -n "$IN_NIX_SHELL"; then return; fi' ${config.out}/etc/zshenv
      echo >&2 "checking zshenv.d in /etc/zshenv"
      grep 'source /etc/zshenv.d/\*.conf' ${config.out}/etc/zshenv
 
@@ -36,7 +35,9 @@
      echo >&2 "checking compinit in /etc/zshrc"
      grep 'autoload -U compinit && compinit' ${config.out}/etc/zshrc
      echo >&2 "checking bashcompinit in /etc/zshrc"
-     grep -vq 'bashcompinit' ${config.out}/etc/zshrc
+     (! grep 'bashcompinit' ${config.out}/etc/zshrc)
+     echo >&2 "checking zsh-autosuggestions in /etc/zshrc"
+     grep 'source ${pkgs.zsh-autosuggestions}/share/zsh-autosuggestions/zsh-autosuggestions.zsh' ${config.out}/etc/zshrc
 
      echo >&2 "checking zprofile.d in /etc/zprofile"
      grep 'source /etc/zprofile.d/\*.conf' ${config.out}/etc/zprofile

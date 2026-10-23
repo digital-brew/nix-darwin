@@ -1,5 +1,7 @@
 [
   ./alias.nix
+  ./config/system-path.nix
+  ./config/terminfo.nix
   ./documentation
   ./meta.nix
   ./misc/ids.nix
@@ -10,10 +12,12 @@
   ./security/sudo.nix
   ./system
   ./system/base.nix
+  ./system/primary-user.nix
   ./system/checks.nix
   ./system/activation-scripts.nix
   ./system/applications.nix
   ./system/defaults-write.nix
+  ./system/defaults/controlcenter.nix
   ./system/defaults/LaunchServices.nix
   ./system/defaults/NSGlobalDomain.nix
   ./system/defaults/GlobalPreferences.nix
@@ -21,6 +25,8 @@
   ./system/defaults/clock.nix
   ./system/defaults/dock.nix
   ./system/defaults/finder.nix
+  ./system/defaults/hitoolbox.nix
+  ./system/defaults/iCal.nix
   ./system/defaults/screencapture.nix
   ./system/defaults/screensaver.nix
   ./system/defaults/alf.nix
@@ -32,9 +38,11 @@
   ./system/defaults/trackpad.nix
   ./system/defaults/universalaccess.nix
   ./system/defaults/ActivityMonitor.nix
+  ./system/defaults/WindowManager.nix
   ./system/etc.nix
   ./system/keyboard.nix
   ./system/launchd.nix
+  ./system/newsyslog.nix
   ./system/nvram.nix
   ./system/patches.nix
   ./system/shells.nix
@@ -42,19 +50,25 @@
   ./system/version.nix
   ./time
   ./networking
+  ./networking/applicationFirewall.nix
   ./nix
   ./nix/linux-builder.nix
   ./nix/nix-darwin.nix
   ./nix/nixpkgs.nix
+  ./nix/nixpkgs-flake.nix
   ./environment
   ./fonts
   ./launchd
+  ./power
+  ./power/sleep.nix
   ./services/activate-system
+  ./services/aerospace
   ./services/autossh.nix
   ./services/buildkite-agents.nix
   ./services/chunkwm.nix
   ./services/cachix-agent.nix
   ./services/dnsmasq.nix
+  ./services/dnscrypt-proxy.nix
   ./services/emacs.nix
   ./services/eternal-terminal.nix
   ./services/github-runner
@@ -68,11 +82,14 @@
   ./services/mail/offlineimap.nix
   ./services/mopidy.nix
   ./services/monitoring/telegraf.nix
+  ./services/monitoring/netdata.nix
+  ./services/monitoring/prometheus-node-exporter.nix
   ./services/netbird.nix
   ./services/nix-daemon.nix
   ./services/nix-gc
   ./services/nix-optimise
   ./services/ofborg
+  ./services/openssh.nix
   ./services/postgresql
   ./services/privoxy
   ./services/redis
@@ -87,14 +104,21 @@
   ./services/wg-quick.nix
   ./services/yabai
   ./services/nextdns
+  ./services/jankyborders
+  ./programs/_1password.nix
+  ./programs/_1password-gui.nix
+  ./programs/arqbackup.nix
   ./programs/bash
+  ./programs/devenv.nix
   ./programs/direnv.nix
   ./programs/fish.nix
   ./programs/gnupg.nix
   ./programs/man.nix
+  ./programs/mas.nix
   ./programs/info
+  ./programs/nh.nix
   ./programs/nix-index
-  ./programs/ssh
+  ./programs/ssh.nix
   ./programs/tmux.nix
   ./programs/vim.nix
   ./programs/zsh

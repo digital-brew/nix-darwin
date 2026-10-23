@@ -11,8 +11,8 @@ let
     mkTextDerivation = pkgs.writeText;
   };
 
-  launchdVariables = mapAttrsToList (name: value: ''
-    launchctl setenv ${name} '${value}'
+  launchdVariables = prefix: mapAttrsToList (name: value: ''
+    ${prefix} launchctl setenv ${name} '${value}'
   '');
 
   launchdActivation = basedir: target: ''
@@ -31,19 +31,21 @@ let
     fi
   '';
 
-  userLaunchdActivation = target: ''
-    if ! diff ${cfg.build.launchd}/user/Library/LaunchAgents/${target} ~/Library/LaunchAgents/${target} &> /dev/null; then
-      if test -f ~/Library/LaunchAgents/${target}; then
+  userLaunchdActivation = target: let
+    user = lib.escapeShellArg config.system.primaryUser;
+  in ''
+    if ! diff ${cfg.build.launchd}/user/Library/LaunchAgents/${target} ~${user}/Library/LaunchAgents/${target} &> /dev/null; then
+      if test -f ~${user}/Library/LaunchAgents/${target}; then
         echo "reloading user service $(basename ${target} .plist)" >&2
-        launchctl unload ~/Library/LaunchAgents/${target} || true
+        launchctl asuser "$(id -u -- ${user})" sudo --user=${user} -- launchctl unload ~${user}/Library/LaunchAgents/${target} || true
       else
         echo "creating user service $(basename ${target} .plist)" >&2
       fi
-      if test -L ~/Library/LaunchAgents/${target}; then
-        rm ~/Library/LaunchAgents/${target}
+      if test -L ~${user}/Library/LaunchAgents/${target}; then
+        sudo --user=${user} -- rm ~${user}/Library/LaunchAgents/${target}
       fi
-      cp -f '${cfg.build.launchd}/user/Library/LaunchAgents/${target}' ~/Library/LaunchAgents/${target}
-      launchctl load -w ~/Library/LaunchAgents/${target}
+      sudo --user=${user} -- cp -f '${cfg.build.launchd}/user/Library/LaunchAgents/${target}' ~${user}/Library/LaunchAgents/${target}
+      launchctl asuser "$(id -u -- ${user})" sudo --user=${user} -- launchctl load -w ~${user}/Library/LaunchAgents/${target}
     fi
   '';
 
@@ -59,7 +61,7 @@ in
     environment.launchAgents = mkOption {
       type = types.attrsOf (types.submodule text);
       default = { };
-      description = lib.mdDoc ''
+      description = ''
         Set of files that have to be linked in {file}`/Library/LaunchAgents`.
       '';
     };
@@ -67,7 +69,7 @@ in
     environment.launchDaemons = mkOption {
       type = types.attrsOf (types.submodule text);
       default = { };
-      description = lib.mdDoc ''
+      description = ''
         Set of files that have to be linked in {file}`/Library/LaunchDaemons`.
       '';
     };
@@ -75,7 +77,7 @@ in
     environment.userLaunchAgents = mkOption {
       type = types.attrsOf (types.submodule text);
       default = { };
-      description = lib.mdDoc ''
+      description = ''
         Set of files that have to be linked in {file}`~/Library/LaunchAgents`.
       '';
     };
@@ -100,44 +102,61 @@ in
       # Set up launchd services in /Library/LaunchAgents and /Library/LaunchDaemons
       echo "setting up launchd services..." >&2
 
-      ${concatStringsSep "\n" (launchdVariables config.launchd.envVariables)}
+      ${concatStringsSep "\n" (launchdVariables "" config.launchd.envVariables)}
 
       ${concatMapStringsSep "\n" (attr: launchdActivation "LaunchAgents" attr.target) launchAgents}
       ${concatMapStringsSep "\n" (attr: launchdActivation "LaunchDaemons" attr.target) launchDaemons}
 
-      for f in $(ls /run/current-system/Library/LaunchAgents 2> /dev/null); do
-        if test ! -e "${cfg.build.launchd}/Library/LaunchAgents/$f"; then
-          echo "removing service $(basename $f .plist)" >&2
+      for f in /run/current-system/Library/LaunchAgents/*; do
+        [[ -e "$f" ]] || break  # handle when directory is empty
+        f=''${f#/run/current-system/Library/LaunchAgents/}
+
+        if [[ ! -e "${cfg.build.launchd}/Library/LaunchAgents/$f" ]]; then
+          echo "removing service $(basename "$f" .plist)" >&2
           launchctl unload "/Library/LaunchAgents/$f" || true
-          if test -e "/Library/LaunchAgents/$f"; then rm -f "/Library/LaunchAgents/$f"; fi
+          if [[ -e "/Library/LaunchAgents/$f" ]]; then
+            rm -f "/Library/LaunchAgents/$f"
+          fi
         fi
       done
 
-      for f in $(ls /run/current-system/Library/LaunchDaemons 2> /dev/null); do
-        if test ! -e "${cfg.build.launchd}/Library/LaunchDaemons/$f"; then
-          echo "removing service $(basename $f .plist)" >&2
+      for f in /run/current-system/Library/LaunchDaemons/*; do
+        [[ -e "$f" ]] || break  # handle when directory is empty
+        f=''${f#/run/current-system/Library/LaunchDaemons/}
+
+        if [[ ! -e "${cfg.build.launchd}/Library/LaunchDaemons/$f" ]]; then
+          echo "removing service $(basename "$f" .plist)" >&2
           launchctl unload "/Library/LaunchDaemons/$f" || true
-          if test -e "/Library/LaunchDaemons/$f"; then rm -f "/Library/LaunchDaemons/$f"; fi
+          if [[ -e "/Library/LaunchDaemons/$f" ]]; then
+            rm -f "/Library/LaunchDaemons/$f"
+          fi
         fi
       done
     '';
 
-    system.activationScripts.userLaunchd.text = ''
+    system.activationScripts.userLaunchd.text = let
+      user = lib.escapeShellArg config.system.primaryUser;
+    in mkIf (config.launchd.user.envVariables != { } || userLaunchAgents != [ ]) ''
       # Set up user launchd services in ~/Library/LaunchAgents
       echo "setting up user launchd services..."
 
-      ${concatStringsSep "\n" (launchdVariables config.launchd.user.envVariables)}
+      ${concatStringsSep "\n" (launchdVariables "sudo --user=${user} --" config.launchd.user.envVariables)}
 
       ${optionalString (builtins.length userLaunchAgents > 0) ''
-      mkdir -p ~/Library/LaunchAgents
+      sudo --user=${user} -- mkdir -p ~${user}/Library/LaunchAgents
       ''}
       ${concatMapStringsSep "\n" (attr: userLaunchdActivation attr.target) userLaunchAgents}
 
-      for f in $(ls /run/current-system/user/Library/LaunchAgents 2> /dev/null); do
-        if test ! -e "${cfg.build.launchd}/user/Library/LaunchAgents/$f"; then
-          echo "removing user service $(basename $f .plist)" >&2
-          launchctl unload ~/Library/LaunchAgents/$f || true
-          if test -e ~/Library/LaunchAgents/$f; then rm -f ~/Library/LaunchAgents/$f; fi
+      for f in /run/current-system/user/Library/LaunchAgents/*; do
+        [[ -e "$f" ]] || break  # handle when directory is empty
+        f=''${f#/run/current-system/user/Library/LaunchAgents/}
+
+        if [[ ! -e "${cfg.build.launchd}/user/Library/LaunchAgents/$f" ]]; then
+          echo "removing user service $(basename "$f" .plist)" >&2
+          sudo --user=${user} -- launchctl unload ~${user}/Library/LaunchAgents/"$f" || true
+          if [[ -e ~${user}/Library/LaunchAgents/"$f" ]]; then
+            sudo --user=${user} -- rm -f ~${user}/Library/LaunchAgents/"$f"
+          fi
         fi
       done
     '';

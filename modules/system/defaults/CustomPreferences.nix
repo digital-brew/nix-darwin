@@ -2,10 +2,25 @@
 
 with lib;
 
-{
+let
+  valueType = with lib.types; nullOr (oneOf [
+    bool
+    int
+    float
+    str
+    path
+    (attrsOf valueType)
+    (listOf valueType)
+  ]) // {
+    description = "plist value";
+  };
+  defaultsType = types.submodule {
+    freeformType = valueType;
+  };
+in {
   options = {
     system.defaults.CustomUserPreferences = mkOption {
-      type = types.attrs;
+      type = defaultsType;
       default = { };
       example = {
         "NSGlobalDomain" = { "TISRomanSwitchState" = 1; };
@@ -14,13 +29,13 @@ with lib;
             true;
         };
       };
-      description = lib.mdDoc ''
+      description = ''
         Sets custom user preferences
       '';
     };
 
     system.defaults.CustomSystemPreferences = mkOption {
-      type = types.attrs;
+      type = defaultsType;
       default = { };
       example = {
         "NSGlobalDomain" = { "TISRomanSwitchState" = 1; };
@@ -29,7 +44,7 @@ with lib;
             true;
         };
       };
-      description = lib.mdDoc ''
+      description = ''
         Sets custom system preferences
       '';
     };

@@ -12,6 +12,8 @@ let
 
   isNixAtLeast = versionAtLeast (getVersion nixPackage);
 
+  configureBuildUsers = !(config.nix.settings.auto-allocate-uids or false);
+
   makeNixBuildUser = nr: {
     name = "_nixbld${toString nr}";
     value = {
@@ -49,13 +51,16 @@ let
 
       mkKeyValuePairs = attrs: concatStringsSep "\n" (mapAttrsToList mkKeyValue attrs);
 
+      isExtra = key: hasPrefix "extra-" key;
+
     in
     pkgs.writeTextFile {
       name = "nix.conf";
       text = ''
         # WARNING: this file is generated from the nix.* options in
         # your nix-darwin configuration. Do not edit it!
-        ${mkKeyValuePairs cfg.settings}
+        ${mkKeyValuePairs (filterAttrs (key: value: !(isExtra key)) cfg.settings)}
+        ${mkKeyValuePairs (filterAttrs (key: value: isExtra key) cfg.settings)}
         ${cfg.extraOptions}
       '';
       checkPhase =
@@ -134,6 +139,34 @@ let
         namedPaths ++ searchPaths;
   };
 
+  handleUnmanaged = managedConfig: mkMerge [
+    (mkIf cfg.enable managedConfig)
+    (mkIf (!cfg.enable) {
+      system.activationScripts.nix-daemon.text = ''
+        # Restore unmanaged Nix daemon if present
+        unmanagedNixProfile=/nix/var/nix/profiles/default
+        if [[
+          -e /run/current-system/Library/LaunchDaemons/org.nixos.nix-daemon.plist
+          && -e $unmanagedNixProfile/Library/LaunchDaemons/org.nixos.nix-daemon.plist
+        ]]; then
+          printf >&2 'restoring unmanaged Nix daemon...\n'
+          cp \
+            "$unmanagedNixProfile/Library/LaunchDaemons/org.nixos.nix-daemon.plist" \
+            /Library/LaunchDaemons
+          launchctl load -w /Library/LaunchDaemons/org.nixos.nix-daemon.plist
+        fi
+      '';
+    })
+  ];
+
+  managedDefault = name: default: {
+    default = if cfg.enable then default else throw ''
+      ${name}: accessed when `nix.enable` is off; this is a bug in
+      nix-darwin or a third‐party module
+    '';
+    defaultText = default;
+  };
+
 in
 
 {
@@ -144,7 +177,6 @@ in
     in
     [
       # Only ever in NixOS
-      (mkRemovedOptionModule [ "nix" "enable" ] "No `nix-darwin` equivalent to this NixOS option.")
       (mkRemovedOptionModule [ "nix" "daemonCPUSchedPolicy" ] (altOption "nix.daemonProcessType"))
       (mkRemovedOptionModule [ "nix" "daemonIOSchedClass" ] (altOption "nix.daemonProcessType"))
       (mkRemovedOptionModule [ "nix" "daemonIOSchedPriority" ] (altOption "nix.daemonIOLowPriority"))
@@ -157,6 +189,14 @@ in
       (mkRenamedOptionModule [ "users" "nix" "nrBuildUsers" ] [ "nix" "nrBuildUsers" ])
       (mkRenamedOptionModule [ "nix" "daemonIONice" ] [ "nix" "daemonIOLowPriority" ])
       (mkRemovedOptionModule [ "nix" "daemonNiceLevel" ] (consider "nix.daemonProcessType"))
+      (mkRemovedOptionModule [ "nix" "useDaemon" ] ''
+        nix-darwin now only supports managing multi‐user daemon
+        installations of Nix.
+      '')
+      (mkRemovedOptionModule [ "nix" "configureBuildUsers" ] ''
+        nix-darwin now manages build users unconditionally when
+        `nix.enable` is on.
+      '')
     ] ++ mapAttrsToList (oldConf: newConf: mkRenamedOptionModule [ "nix" oldConf ] [ "nix" "settings" newConf ]) legacyConfMappings;
 
   ###### interface
@@ -165,43 +205,54 @@ in
 
     nix = {
 
-      package = mkOption {
-        type = types.package;
-        default = pkgs.nix;
-        defaultText = literalExpression "pkgs.nix";
-        description = lib.mdDoc ''
-          This option specifies the Nix package instance to use throughout the system.
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          Whether to enable Nix.
+
+          Disabling this will stop nix-darwin from managing the
+          installed version of Nix, the nix-daemon launchd daemon, and
+          the settings in {file}`/etc/nix/nix.conf`.
+
+          This allows you to use nix-darwin without it taking over your
+          system installation of Nix. Some nix-darwin functionality
+          that relies on managing the Nix installation, like the
+          `nix.*` options to adjust Nix settings or configure a Linux
+          builder, will be unavailable. You will also have to upgrade
+          Nix yourself, as nix-darwin will no longer do so.
+
+          ::: {.warning}
+          If you have already removed your global system installation
+          of Nix, this will break nix-darwin and you will have to
+          reinstall Nix to fix it.
+          :::
         '';
       };
 
-      # Not in NixOS module
-      useDaemon = mkOption {
-        type = types.bool;
-        default = false;
-        description = lib.mdDoc ''
-          If set, Nix will use the daemon to perform operations.
-          Use this instead of services.nix-daemon.enable if you don't want the
-          daemon service to be managed for you.
+      package = mkOption {
+        type = types.package;
+        inherit (managedDefault "nix.package" pkgs.nix) default;
+        defaultText = literalExpression "pkgs.nix";
+        description = ''
+          This option specifies the Nix package instance to use throughout the system.
         '';
       };
 
       distributedBuilds = mkOption {
         type = types.bool;
-        default = false;
-        description = lib.mdDoc ''
+        inherit (managedDefault "nix.distributedBuilds" false) default defaultText;
+        description = ''
           Whether to distribute builds to the machines listed in
           {option}`nix.buildMachines`.
-
-          NOTE: This requires services.nix-daemon.enable for a
-          multi-user install.
         '';
       };
 
       # Not in NixOS module
       daemonProcessType = mkOption {
         type = types.enum [ "Background" "Standard" "Adaptive" "Interactive" ];
-        default = "Standard";
-        description = lib.mdDoc ''
+        inherit (managedDefault "nix.daemonProcessType" "Standard") default defaultText;
+        description = ''
           Nix daemon process resource limits class. These limits propagate to
           build processes. `Standard` is the default process type
           and will apply light resource limits, throttling its CPU usage and I/O
@@ -215,8 +266,8 @@ in
       # Not in NixOS module
       daemonIOLowPriority = mkOption {
         type = types.bool;
-        default = false;
-        description = lib.mdDoc ''
+        inherit (managedDefault "nix.daemonIOLowPriority" false) default defaultText;
+        description = ''
           Whether the Nix daemon process should considered to be low priority when
           doing file system I/O.
         '';
@@ -228,7 +279,7 @@ in
             hostName = mkOption {
               type = types.str;
               example = "nixbuilder.example.org";
-              description = lib.mdDoc ''
+              description = ''
                 The hostname of the build machine.
               '';
             };
@@ -236,7 +287,7 @@ in
               type = types.enum [ null "ssh" "ssh-ng" ];
               default = "ssh";
               example = "ssh-ng";
-              description = lib.mdDoc ''
+              description = ''
                 The protocol used for communicating with the build machine.
                 Use `ssh-ng` if your remote builder and your
                 local Nix version support that improved protocol.
@@ -249,7 +300,7 @@ in
               type = types.nullOr types.str;
               default = null;
               example = "x86_64-linux";
-              description = lib.mdDoc ''
+              description = ''
                 The system type the build machine can execute derivations on.
                 Either this attribute or {var}`systems` must be
                 present, where {var}`system` takes precedence if
@@ -260,7 +311,7 @@ in
               type = types.listOf types.str;
               default = [ ];
               example = [ "x86_64-linux" "aarch64-linux" ];
-              description = lib.mdDoc ''
+              description = ''
                 The system types the build machine can execute derivations on.
                 Either this attribute or {var}`system` must be
                 present, where {var}`system` takes precedence if
@@ -271,7 +322,7 @@ in
               type = types.nullOr types.str;
               default = null;
               example = "builder";
-              description = lib.mdDoc ''
+              description = ''
                 The username to log in as on the remote host. This user must be
                 able to log in and run nix commands non-interactively. It must
                 also be privileged to build derivations, so must be included in
@@ -282,7 +333,7 @@ in
               type = types.nullOr types.str;
               default = null;
               example = "/root/.ssh/id_buildhost_builduser";
-              description = lib.mdDoc ''
+              description = ''
                 The path to the SSH private key with which to authenticate on
                 the build machine. The private key must not have a passphrase.
                 If null, the building user (root on NixOS machines) must have an
@@ -295,7 +346,7 @@ in
             maxJobs = mkOption {
               type = types.int;
               default = 1;
-              description = lib.mdDoc ''
+              description = ''
                 The number of concurrent jobs the build machine supports. The
                 build machine will enforce its own limits, but this allows hydra
                 to schedule better since there is no work-stealing between build
@@ -305,7 +356,7 @@ in
             speedFactor = mkOption {
               type = types.int;
               default = 1;
-              description = lib.mdDoc ''
+              description = ''
                 The relative speed of this builder. This is an arbitrary integer
                 that indicates the speed of this builder, relative to other
                 builders. Higher is faster.
@@ -315,7 +366,7 @@ in
               type = types.listOf types.str;
               default = [ ];
               example = [ "big-parallel" ];
-              description = lib.mdDoc ''
+              description = ''
                 A list of features mandatory for this builder. The builder will
                 be ignored for derivations that don't require all features in
                 this list. All mandatory features are automatically included in
@@ -326,7 +377,7 @@ in
               type = types.listOf types.str;
               default = [ ];
               example = [ "kvm" "big-parallel" ];
-              description = lib.mdDoc ''
+              description = ''
                 A list of features supported by this builder. The builder will
                 be ignored for derivations that require features not in this
                 list.
@@ -335,7 +386,7 @@ in
             publicHostKey = mkOption {
               type = types.nullOr types.str;
               default = null;
-              description = lib.mdDoc ''
+              description = ''
                 The (base64-encoded) public host key of this builder. The field
                 is calculated via {command}`base64 -w0 /etc/ssh/ssh_host_type_key.pub`.
                 If null, SSH will use its regular known-hosts file when connecting.
@@ -343,8 +394,8 @@ in
             };
           };
         });
-        default = [ ];
-        description = lib.mdDoc ''
+        inherit (managedDefault "nix.buildMachines" [ ]) default defaultText;
+        description = ''
           This option lists the machines to be used if distributed builds are
           enabled (see {option}`nix.distributedBuilds`).
           Nix will perform derivations on those machines via SSH by copying the
@@ -357,22 +408,14 @@ in
       envVars = mkOption {
         type = types.attrs;
         internal = true;
-        default = { };
-        description = lib.mdDoc "Environment variables used by Nix.";
-      };
-
-      # Not in NixOS module
-      configureBuildUsers = mkOption {
-        type = types.bool;
-        default = false;
-        description = lib.mdDoc ''
-          Enable configuration for nixbld group and users.
-        '';
+        inherit (managedDefault "nix.envVars" { }) default defaultText;
+        description = "Environment variables used by Nix.";
       };
 
       nrBuildUsers = mkOption {
         type = types.int;
-        description = lib.mdDoc ''
+        inherit (managedDefault "nix.nrBuildUsers" 0) default defaultText;
+        description = ''
           Number of `nixbld` user accounts created to
           perform secure concurrent builds.  If you receive an error
           message saying that “all build users are currently in use”,
@@ -380,15 +423,44 @@ in
         '';
       };
 
+      channel = {
+        enable = mkOption {
+          description = ''
+            Whether the `nix-channel` command and state files are made available on the machine.
+
+            The following files are initialized when enabled:
+              - `/nix/var/nix/profiles/per-user/root/channels`
+              - `$HOME/.nix-defexpr/channels` (on login)
+
+            Disabling this option will not remove the state files from the system.
+          '';
+          type = types.bool;
+          default = true;
+        };
+      };
+
       # Definition differs substantially from NixOS module
       nixPath = mkOption {
         type = nixPathType;
-        default = [
+        inherit (managedDefault "nix.nixPath" (
+          lib.optionals cfg.channel.enable (
+            lib.optionals (config.environment.darwinConfig != null) [
+              # Include default path <darwin-config>.
+              { darwin-config = "${config.environment.darwinConfig}"; }
+            ] ++ [
+              "/nix/var/nix/profiles/per-user/root/channels"
+            ]
+          )
+        )) default;
+
+        defaultText = lib.literalExpression ''
+          lib.optionals cfg.channel.enable [
             # Include default path <darwin-config>.
-            { darwin-config = "${config.environment.darwinConfig}"; }
+            { darwin-config = "''${config.environment.darwinConfig}"; }
             "/nix/var/nix/profiles/per-user/root/channels"
-          ];
-        description = lib.mdDoc ''
+          ]
+        '';
+        description = ''
           The default Nix expression search path, used by the Nix
           evaluator to look up paths enclosed in angle brackets
           (e.g. `<nixpkgs>`).
@@ -401,8 +473,8 @@ in
 
       checkConfig = mkOption {
         type = types.bool;
-        default = true;
-        description = lib.mdDoc ''
+        inherit (managedDefault "nix.checkConfig" true) default defaultText;
+        description = ''
           If enabled (the default), checks for data type mismatches and that Nix
           can parse the generated nix.conf.
         '';
@@ -424,25 +496,25 @@ in
               from = mkOption {
                 type = referenceAttrs;
                 example = { type = "indirect"; id = "nixpkgs"; };
-                description = lib.mdDoc "The flake reference to be rewritten.";
+                description = "The flake reference to be rewritten.";
               };
               to = mkOption {
                 type = referenceAttrs;
                 example = { type = "github"; owner = "my-org"; repo = "my-nixpkgs"; };
-                description = lib.mdDoc "The flake reference {option}`from` is rewritten to.";
+                description = "The flake reference {option}`from` is rewritten to.";
               };
               flake = mkOption {
                 type = types.nullOr types.attrs;
                 default = null;
                 example = literalExpression "nixpkgs";
-                description = lib.mdDoc ''
+                description = ''
                   The flake input {option}`from` is rewritten to.
                 '';
               };
               exact = mkOption {
                 type = types.bool;
                 default = true;
-                description = lib.mdDoc ''
+                description = ''
                   Whether the {option}`from` reference needs to match exactly. If set,
                   a {option}`from` reference like `nixpkgs` does not
                   match with a reference like `nixpkgs/nixos-20.03`.
@@ -462,20 +534,20 @@ in
             };
           }
         ));
-        default = { };
-        description = lib.mdDoc ''
+        inherit (managedDefault "nix.registry" { }) default defaultText;
+        description = ''
           A system-wide flake registry.
         '';
       };
 
       extraOptions = mkOption {
         type = types.lines;
-        default = "";
+        inherit (managedDefault "nix.extraOptions" "") default defaultText;
         example = ''
           keep-outputs = true
           keep-derivations = true
         '';
-        description = lib.mdDoc "Additional text appended to {file}`nix.conf`.";
+        description = "Additional text appended to {file}`nix.conf`.";
       };
 
       settings = mkOption {
@@ -487,7 +559,7 @@ in
               type = types.either types.int (types.enum [ "auto" ]);
               default = "auto";
               example = 64;
-              description = lib.mdDoc ''
+              description = ''
                 This option defines the maximum number of jobs that Nix will try to
                 build in parallel. The default is auto, which means it will use all
                 available logical cores. It is recommend to set it to the total
@@ -500,11 +572,13 @@ in
               type = types.bool;
               default = false;
               example = true;
-              description = lib.mdDoc ''
+              description = ''
                 If set to true, Nix automatically detects files in the store that have
                 identical contents, and replaces them with hard links to a single copy.
-                This saves disk space. If set to false (the default), you can still run
-                nix-store --optimise to get rid of duplicate files.
+                This saves disk space. If set to false (the default), you can enable
+                {option}`nix.optimise.automatic` to run {command}`nix-store --optimise`
+                periodically to get rid of duplicate files. You can also run
+                {command}`nix-store --optimise` manually.
               '';
             };
 
@@ -512,7 +586,7 @@ in
               type = types.int;
               default = 0;
               example = 64;
-              description = lib.mdDoc ''
+              description = ''
                 This option defines the maximum number of concurrent tasks during
                 one build. It affects, e.g., -j option for make.
                 The special value 0 means that the builder should use all
@@ -525,7 +599,7 @@ in
             sandbox = mkOption {
               type = types.either types.bool (types.enum [ "relaxed" ]);
               default = false;
-              description = lib.mdDoc ''
+              description = ''
                 If set, Nix will perform builds in a sandboxed environment that it
                 will set up automatically for each build. This prevents impurities
                 in builds by disallowing access to dependencies outside of the Nix
@@ -539,7 +613,7 @@ in
               type = types.listOf types.str;
               default = [ ];
               example = [ "/dev" "/proc" ];
-              description = lib.mdDoc ''
+              description = ''
                 Directories from the host filesystem to be included
                 in the sandbox.
               '';
@@ -547,7 +621,7 @@ in
 
             substituters = mkOption {
               type = types.listOf types.str;
-              description = lib.mdDoc ''
+              description = ''
                 List of binary cache URLs used to obtain pre-built binaries
                 of Nix packages.
 
@@ -559,7 +633,7 @@ in
               type = types.listOf types.str;
               default = [ ];
               example = [ "https://hydra.nixos.org/" ];
-              description = lib.mdDoc ''
+              description = ''
                 List of binary cache URLs that non-root users can use (in
                 addition to those specified using
                 {option}`nix.settings.substituters`) by passing
@@ -570,7 +644,7 @@ in
             require-sigs = mkOption {
               type = types.bool;
               default = true;
-              description = lib.mdDoc ''
+              description = ''
                 If enabled (the default), Nix will only download binaries from binary caches if
                 they are cryptographically signed with any of the keys listed in
                 {option}`nix.settings.trusted-public-keys`. If disabled, signatures are neither
@@ -582,7 +656,7 @@ in
             trusted-public-keys = mkOption {
               type = types.listOf types.str;
               example = [ "hydra.nixos.org-1:CNHJZBh9K4tP3EKF6FkkgeVYsS3ohTl+oS0Qa8bezVs=" ];
-              description = lib.mdDoc ''
+              description = ''
                 List of public keys used to sign binary caches. If
                 {option}`nix.settings.trusted-public-keys` is enabled,
                 then Nix will use a binary from a binary cache if and only
@@ -594,9 +668,8 @@ in
 
             trusted-users = mkOption {
               type = types.listOf types.str;
-              default = [ "root" ];
               example = [ "root" "alice" "@admin" ];
-              description = lib.mdDoc ''
+              description = ''
                 A list of names of users that have additional rights when
                 connecting to the Nix daemon, such as the ability to specify
                 additional binary caches, or to import unsigned NARs. You
@@ -626,7 +699,7 @@ in
               type = types.listOf types.str;
               default = [ "*" ];
               example = [ "@admin" "@builders" "alice" "bob" ];
-              description = lib.mdDoc ''
+              description = ''
                 A list of names of users (separated by whitespace) that are
                 allowed to connect to the Nix daemon. As with
                 {option}`nix.settings.trusted-users`, you can specify groups by
@@ -638,8 +711,8 @@ in
             };
           };
         };
-        default = { };
-        description = lib.mdDoc ''
+        inherit (managedDefault "nix.settings" { }) default defaultText;
+        description = ''
           Configuration for Nix, see
           <https://nixos.org/manual/nix/stable/#sec-conf-file>
           for avalaible options.
@@ -656,13 +729,13 @@ in
 
   ###### implementation
 
-  config = {
+  config = handleUnmanaged {
     environment.systemPackages =
       [
         nixPackage
         pkgs.nix-info
       ]
-      ++ optional (config.programs.bash.enableCompletion) pkgs.nix-bash-completions;
+      ++ optional (config.programs.bash.completion.enable) pkgs.nix-bash-completions;
 
     environment.etc."nix/nix.conf".source = nixConf;
 
@@ -677,7 +750,16 @@ in
       "f3e03d851c240c1aa7daccd144ee929f0f5971982424c868c434eb6030e961d4"  # DeterminateSystems Nix installer 0.10.0
       "c6080216f2a170611e339c3f46e4e1d61aaf0d8b417ad93ade8d647da1382c11"  # DeterminateSystems Nix installer 0.14.0
       "97f4135d262ca22d65c9554aad795c10a4491fa61b67d9c2430f4d82bbfec9a2"  # DeterminateSystems Nix installer 0.15.1
-      "5d23e6d7015756c6f300f8cd558ec4d9234ca61deefd4f2478e91a49760b0747" # DeterminateSystems Nix installer 0.16.0+
+      "5d23e6d7015756c6f300f8cd558ec4d9234ca61deefd4f2478e91a49760b0747"  # DeterminateSystems Nix installer 0.16.0
+      "e4974acb79c56148cb8e92137fa4f2de9b7356e897b332fc4e6769e8c0b83e18"  # DeterminateSystems Nix installer 0.20.0
+      "966d22ef5bb9b56d481e8e0d5f7ca2deaf4d24c0f0fc969b2eeaa7ae0aa42907"  # DeterminateSystems Nix installer 0.22.0
+      "53712b4335030e2dbfb46bb235f8cffcac83fea404bd32dc99417ac89e2dd7c5"  # DeterminateSystems Nix installer 0.33.0
+      "6bb8d6b0dd16b44ee793a9b8382dac76c926e4c16ffb8ddd2bb4884d1ca3f811"  # DeterminateSystems Nix installer 0.34.0
+      "24797ac05542ff8b52910efc77870faa5f9e3275097227ea4e50c430a5f72916"  # lix-installer 0.17.1 with flakes
+      "b027b5cad320b5b8123d9d0db9f815c3f3921596c26dc3c471457098e4d3cc40"  # lix-installer 0.17.1 without flakes
+      "74ee0ae5ad21a1b101617685fd3d001f74a9466d9d763d92eb75b99cc740db91"  # experimental official Nix installer 2.33.3
+      "daa9d824601c088f52de3da176e14328ba41e7be3eb450fdf8b93c86f236f722"  # lix-installer 3.95.0 (47bc300) with flakes
+      "7659f39ef9ab9cdf50f8e6ae3476cbf3f27be6485500d1f225d45574d943a9f7"  # lix-installer 3.95.0 (47bc300) without flakes
     ];
 
     environment.etc."nix/registry.json".text = builtins.toJSON {
@@ -731,53 +813,58 @@ in
 
         # Not in NixOS module
         { assertion = elem "nixbld" config.users.knownGroups -> elem "nixbld" createdGroups; message = "refusing to delete group nixbld in users.knownGroups, this would break nix"; }
-        { assertion = elem "_nixbld1" config.users.knownGroups -> elem "_nixbld1" createdUsers; message = "refusing to delete user _nixbld1 in users.knownUsers, this would break nix"; }
+        { assertion = elem "_nixbld1" config.users.knownUsers -> elem "_nixbld1" createdUsers; message = "refusing to delete user _nixbld1 in users.knownUsers, this would break nix"; }
         { assertion = config.users.groups ? "nixbld" -> config.users.groups.nixbld.members != []; message = "refusing to remove all members from nixbld group, this would break nix"; }
+
+        {
+          # Should be fixed in Lix by https://gerrit.lix.systems/c/lix/+/2100, Nix by https://github.com/NixOS/nix/commit/d888846b68dd5fad998b84c5cb6246b1b63398cd
+          # Lix 2.92.0 will set `VERSION_SUFFIX` to `""`; `lib.versionAtLeast "" "pre20241107"` will return `true`.
+          assertion = cfg.settings.auto-optimise-store -> (
+            (cfg.package.pname == "lix" && (isNixAtLeast "2.92.0" && versionAtLeast (strings.removePrefix "-" cfg.package.VERSION_SUFFIX) "pre20241107"))
+            || (cfg.package.pname == "nix" && ((isNixAtLeast "2.31.3" && !isNixAtLeast "2.32") || isNixAtLeast "2.32.5" || isNixAtLeast "2.33"))
+          );
+          message = "`nix.settings.auto-optimise-store` is known to corrupt the Nix Store, please use `nix.optimise.automatic` instead.";
+        }
       ];
 
     # Not in NixOS module
     warnings = [
-      (mkIf (!config.services.activate-system.enable && cfg.distributedBuilds) "services.activate-system is not enabled, a reboot could cause distributed builds to stop working.")
       (mkIf (!cfg.distributedBuilds && cfg.buildMachines != []) "nix.distributedBuilds is not enabled, build machines won't be configured.")
     ];
 
     # Not in NixOS module
-    nix.nixPath = mkMerge [
-      (mkIf (config.system.stateVersion < 2) (mkDefault
-      [ "darwin=$HOME/.nix-defexpr/darwin"
-        "darwin-config=$HOME/.nixpkgs/darwin-configuration.nix"
-        "/nix/var/nix/profiles/per-user/root/channels"
-      ]))
-      (mkIf (config.system.stateVersion > 3) (mkOrder 1200
-      [ { darwin-config = "${config.environment.darwinConfig}"; }
-        "/nix/var/nix/profiles/per-user/root/channels"
-      ]))
+    nix.nixPath = mkIf (config.system.stateVersion < 2) (mkDefault [
+      "darwin=${config.system.primaryUserHome}/.nix-defexpr/darwin"
+      "darwin-config=${config.system.primaryUserHome}/.nixpkgs/darwin-configuration.nix"
+      "/nix/var/nix/profiles/per-user/root/channels"
+    ]);
+
+    system.requiresPrimaryUser = mkIf (
+      config.system.stateVersion < 2
+      && options.nix.nixPath.highestPrio == (mkDefault {}).priority
+    ) [
+      "nix.nixPath"
     ];
 
     # Set up the environment variables for running Nix.
     environment.variables = cfg.envVars // { NIX_PATH = cfg.nixPath; };
 
-    environment.extraInit =
-      ''
-        if [ -e "$HOME/.nix-defexpr/channels" ]; then
-          export NIX_PATH="$HOME/.nix-defexpr/channels''${NIX_PATH:+:$NIX_PATH}"
-        fi
-      '' +
-      # Not in NixOS module
-      ''
-        # Set up secure multi-user builds: non-root users build through the
-        # Nix daemon.
-        if [ ! -w /nix/var/nix/db ]; then
-            export NIX_REMOTE=daemon
-        fi
-      '';
+    environment.extraInit = mkIf cfg.channel.enable ''
+      if [ -e "$HOME/.nix-defexpr/channels" ]; then
+        export NIX_PATH="$HOME/.nix-defexpr/channels''${NIX_PATH:+:$NIX_PATH}"
+      fi
+    '';
+
+    environment.extraSetup = mkIf (!cfg.channel.enable) ''
+      rm --force $out/bin/nix-channel
+    '';
 
     nix.nrBuildUsers = mkDefault (max 32 (if cfg.settings.max-jobs == "auto" then 0 else cfg.settings.max-jobs));
 
-    users.users = mkIf cfg.configureBuildUsers nixbldUsers;
+    users.users = mkIf configureBuildUsers nixbldUsers;
 
     # Not in NixOS module
-    users.groups.nixbld = mkIf cfg.configureBuildUsers {
+    users.groups.nixbld = mkIf configureBuildUsers {
       description = "Nix build group for nix-daemon";
       gid = config.ids.gids.nixbld;
       members = attrNames nixbldUsers;
@@ -785,14 +872,66 @@ in
     users.knownUsers =
       let nixbldUserNames = attrNames nixbldUsers;
       in
-      mkIf cfg.configureBuildUsers (mkMerge [
+      mkMerge [
         nixbldUserNames
         (map (removePrefix "_") nixbldUserNames) # delete old style nixbld users
-      ]);
-    users.knownGroups = mkIf cfg.configureBuildUsers [ "nixbld" ];
+      ];
+    users.knownGroups = [ "nixbld" ];
+
+    # The Determinate Systems installer puts user‐specified settings in
+    # `/etc/nix/nix.custom.conf` since v0.33.0. Supplement the
+    # `/etc/nix/nix.conf` hash check so that we don’t accidentally
+    # clobber user configuration.
+    #
+    # TODO: Maybe this could use a more general file placement mechanism
+    # to express that we want it deleted and know only one hash?
+    system.activationScripts.checks.text = mkAfter ''
+      nixCustomConfKnownSha256Hashes=(
+        # DetSys v0.33.0
+        6787fade1cf934f82db554e78e1fc788705c2c5257fddf9b59bdd963ca6fec63
+        # DetSys v0.34.0
+        3bd68ef979a42070a44f8d82c205cfd8e8cca425d91253ec2c10a88179bb34aa
+        # Nix 2.33.3
+        71f7fdc9f6c9e55ca0f2e6f85137037d660b3224a34d59305e8530ca292bc734
+        # Lix 2.95.1
+        a6dee4985bf207d3bec6a3cee28aefb33e60f5d0a91d8c20bbd71b9dadb2e601
+      )
+      if [[ -e /etc/nix/nix.custom.conf ]]; then
+        nixCustomConfSha256Output=$(shasum -a 256 /etc/nix/nix.custom.conf)
+        nixCustomConfSha256Hash=''${nixCustomConfSha256Output%% *}
+        nixCustomConfIsKnown=
+        for nixCustomConfKnownSha256Hash
+          in "''${nixCustomConfKnownSha256Hashes[@]}"
+        do
+          if
+            [[ $nixCustomConfSha256Hash == "$nixCustomConfKnownSha256Hash" ]]
+          then
+            nixCustomConfIsKnown=1
+            break
+          fi
+        done
+        if [[ ! $nixCustomConfIsKnown ]]; then
+          printf >&2 '\e[1;31merror: custom settings in `/etc/nix/nix.custom.conf`, aborting activation\e[0m\n'
+          printf >&2 'You will need to migrate these to nix-darwin `nix.*` settings if you\n'
+          printf >&2 'wish to keep them. Check the manual for the appropriate settings and\n'
+          printf >&2 'add them to your system configuration, then run:\n'
+          printf >&2 '\n'
+          printf >&2 '  $ sudo mv /etc/nix/nix.custom.conf{,.before-nix-darwin}\n'
+          printf >&2 '\n'
+          printf >&2 'and activate your system again.\n'
+          exit 2
+        fi
+      fi
+    '';
 
     # Unrelated to use in NixOS module
-    system.activationScripts.nix-daemon.text = mkIf cfg.useDaemon ''
+    system.activationScripts.nix-daemon.text = ''
+      # Follow up on the `/etc/nix/nix.custom.conf` check.
+      # TODO: Use a more generalized file placement mechanism for this.
+      if [[ -e /etc/nix/nix.custom.conf ]]; then
+        mv /etc/nix/nix.custom.conf{,.before-nix-darwin}
+      fi
+
       if ! diff /etc/nix/nix.conf /run/current-system/etc/nix/nix.conf &> /dev/null || ! diff /etc/nix/machines /run/current-system/etc/nix/machines &> /dev/null; then
           echo "reloading nix-daemon..." >&2
           launchctl kill HUP system/org.nixos.nix-daemon
@@ -803,11 +942,14 @@ in
       done
     '';
 
-    # Legacy configuration conversion.
     nix.settings = mkMerge [
       {
         trusted-public-keys = [ "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=" ];
+        trusted-users = [ "root" ];
         substituters = mkAfter [ "https://cache.nixos.org/" ];
+
+        # Not in NixOS module
+        build-users-group = "nixbld";
 
         # Not implemented yet
         # system-features = mkDefault (
@@ -824,8 +966,6 @@ in
 
       (mkIf (isNixAtLeast "2.3pre") { sandbox-fallback = false; })
 
-      # Not in NixOS module
-      (mkIf cfg.useDaemon { build-users-group = "nixbld"; })
     ];
 
   };

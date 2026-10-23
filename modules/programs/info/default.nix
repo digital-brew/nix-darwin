@@ -11,7 +11,7 @@ in
     programs.info.enable = mkOption {
       type = types.bool;
       default = true;
-      description = lib.mdDoc "Whether to enable info pages and the {command}`info` command.";
+      description = "Whether to enable info pages and the {command}`info` command.";
     };
   };
 
@@ -22,7 +22,7 @@ in
     environment.pathsToLink = [ "/info" "/share/info" ];
     environment.extraOutputsToInstall = [ "info" ];
 
-    environment.postBuild = ''
+    environment.extraSetup = ''
       if test -w $out/share/info; then
         shopt -s nullglob
         for i in $out/share/info/*.info $out/share/info/*.info.gz; do

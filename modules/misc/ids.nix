@@ -8,7 +8,7 @@
 # to change uids/gids on service start, in example a service with a lot of
 # files.
 
-{ lib, ... }:
+{ lib, config, ... }:
 
 let
   inherit (lib) types;
@@ -18,7 +18,7 @@ in
 
     ids.uids = lib.mkOption {
       internal = true;
-      description = lib.mdDoc ''
+      description = ''
         The user IDs used in NixOS.
       '';
       type = types.attrsOf types.int;
@@ -26,7 +26,7 @@ in
 
     ids.gids = lib.mkOption {
       internal = true;
-      description = lib.mdDoc ''
+      description = ''
         The group IDs used in NixOS.
       '';
       type = types.attrsOf types.int;
@@ -34,15 +34,18 @@ in
 
   };
 
-
   config = {
 
     ids.uids = {
-      nixbld = 300;
+      nixbld = lib.mkDefault 350;
+      _prometheus-node-exporter = 534;
+      _dnscrypt-proxy = 535;
     };
 
     ids.gids = {
-      nixbld = 30000;
+      nixbld = lib.mkDefault (if config.system.stateVersion < 5 then 30000 else 350);
+      _prometheus-node-exporter = 534;
+      _dnscrypt-proxy = 535;
     };
 
   };

@@ -1,27 +1,56 @@
 { config, lib, pkgs, ... }:
 
-with lib;
-
 let
-  cfg = config.services.activate-system;
+  activationPath =
+    lib.makeBinPath (
+      [
+        pkgs.gnugrep
+        pkgs.coreutils
+      ] ++ lib.optionals config.nix.enable [ config.nix.package ]
+    )
+    + lib.optionalString (!config.nix.enable) ''
+      $(
+        # If `nix.enable` is off, there might be an unmanaged Nix
+        # installation (say in `/nix/var/nix/profiles/default`) that
+        # activation scripts (such as Home Manager) want to find on the
+        # `$PATH`. Search for it directly to avoid polluting the
+        # activation script environment with everything on the
+        # `environment.systemPath`.
+        if nixEnvPath=$(
+          PATH="${config.environment.systemPath}" command -v nix-env
+        ); then
+          printf ':'
+          ${lib.getExe' pkgs.coreutils "dirname"} -- "$(
+            ${lib.getExe' pkgs.coreutils "readlink"} \
+              --canonicalize-missing \
+              -- "$nixEnvPath"
+          )"
+        fi
+      )''
+    + ":/usr/bin:/bin:/usr/sbin:/sbin";
 in
 
 {
-  options = {
-    services.activate-system.enable = mkOption {
-      type = types.bool;
-      default = true;
-      description = lib.mdDoc "Whether to activate system at boot time.";
-    };
-  };
+  imports = [
+    (lib.mkRemovedOptionModule [ "services" "activate-system" "enable" ] "The `activate-system` service is now always enabled as it is necessary for a working `nix-darwin` setup.")
+  ];
 
-  config = mkIf cfg.enable {
-
+  config = {
     launchd.daemons.activate-system = {
       script = ''
         set -e
         set -o pipefail
-        export PATH="${pkgs.gnugrep}/bin:${pkgs.coreutils}/bin:@out@/sw/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+        PATH="${activationPath}"
+
+        export PATH
+        export USER=root
+        export LOGNAME=root
+        export HOME=~root
+        export MAIL=/var/mail/root
+        export SHELL=$BASH
+        export LANG=C
+        export LC_CTYPE=UTF-8
 
         systemConfig=$(cat ${config.system.profile}/systemConfig)
 
@@ -32,15 +61,15 @@ in
         ln -sfn $(cat ${config.system.profile}/systemConfig) /run/current-system
 
         # Prevent the current configuration from being garbage-collected.
-        ln -sfn /run/current-system /nix/var/nix/gcroots/current-system
+        if [[ -d /nix/var/nix/gcroots ]]; then
+          ln -sfn /run/current-system /nix/var/nix/gcroots/current-system
+        fi
 
-        ${config.system.activationScripts.etcChecks.text}
+        ${config.system.activationScripts.checks.text}
         ${config.system.activationScripts.etc.text}
         ${config.system.activationScripts.keyboard.text}
       '';
       serviceConfig.RunAtLoad = true;
-      serviceConfig.KeepAlive.SuccessfulExit = false;
     };
-
   };
 }

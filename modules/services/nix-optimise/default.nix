@@ -6,7 +6,6 @@
 
 let
   inherit (lib)
-    mdDoc
     mkIf
     mkOption
     mkRemovedOptionModule
@@ -15,11 +14,13 @@ let
     ;
 
   cfg = config.nix.optimise;
+  launchdTypes = import ../../launchd/types.nix { inherit config lib; };
 in
 
 {
   imports = [
     (mkRemovedOptionModule [ "nix" "optimise" "dates" ] "Use `nix.optimise.interval` instead.")
+    (mkRemovedOptionModule [ "nix" "optimise" "user" ] "The store optimisation service now always runs as `root`.")
   ];
 
   ###### interface
@@ -31,20 +32,17 @@ in
       automatic = mkOption {
         type = types.bool;
         default = false;
-        description = mdDoc "Automatically run the nix store optimiser at a specific time.";
-      };
-
-      # Not in NixOS module
-      user = mkOption {
-        type = types.nullOr types.str;
-        default = null;
-        description = mdDoc "User that runs the store optimisation.";
+        description = "Automatically run the nix store optimiser at a specific time.";
       };
 
       interval = mkOption {
-        type = types.attrs;
-        default = { Hour = 3; Minute = 15; };
-        description = mdDoc "The time interval at which the optimiser will run.";
+        type = launchdTypes.StartCalendarInterval;
+        default = [{ Weekday = 7; Hour = 4; Minute = 15; }];
+        description = ''
+          The calendar interval at which the optimiser will run.
+          See the {option}`serviceConfig.StartCalendarInterval` option of
+          the {option}`launchd` module for more info.
+        '';
       };
 
     };
@@ -54,20 +52,20 @@ in
 
   ###### implementation
 
-  config = mkIf cfg.automatic {
+  config = {
+    assertions = [
+      {
+        assertion = cfg.automatic -> config.nix.enable;
+        message = ''nix.optimise.automatic requires nix.enable'';
+      }
+    ];
 
-    launchd.daemons.nix-optimise = {
-      environment.NIX_REMOTE = optionalString config.nix.useDaemon "daemon";
+    launchd.daemons.nix-optimise = mkIf cfg.automatic {
+      command = "${lib.getExe' config.nix.package "nix-store"} --optimise";
       serviceConfig = {
-        ProgramArguments = [
-          "/bin/sh" "-c"
-          "/bin/wait4path ${config.nix.package} &amp;&amp; exec ${config.nix.package}/bin/nix-store --optimise"
-        ];
         RunAtLoad = false;
-        StartCalendarInterval = [ cfg.interval ];
-        UserName = cfg.user;
+        StartCalendarInterval = cfg.interval;
       };
     };
-
   };
 }

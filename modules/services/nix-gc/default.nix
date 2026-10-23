@@ -6,6 +6,7 @@ with lib;
 
 let
   cfg = config.nix.gc;
+  launchdTypes = import ../../launchd/types.nix { inherit config lib; };
 in
 
 {
@@ -13,6 +14,7 @@ in
     (mkRemovedOptionModule [ "nix" "gc" "dates" ] "Use `nix.gc.interval` instead.")
     (mkRemovedOptionModule [ "nix" "gc" "randomizedDelaySec" ] "No `nix-darwin` equivalent to this NixOS option.")
     (mkRemovedOptionModule [ "nix" "gc" "persistent" ] "No `nix-darwin` equivalent to this NixOS option.")
+    (mkRemovedOptionModule [ "nix" "gc" "user" ] "The garbage collection service now always runs as `root`.")
   ];
 
   ###### interface
@@ -24,27 +26,24 @@ in
       automatic = mkOption {
         default = false;
         type = types.bool;
-        description = lib.mdDoc "Automatically run the garbage collector at a specific time.";
-      };
-
-      # Not in NixOS module
-      user = mkOption {
-        type = types.nullOr types.str;
-        default = null;
-        description = lib.mdDoc "User that runs the garbage collector.";
+        description = "Automatically run the garbage collector at a specific time.";
       };
 
       interval = mkOption {
-        type = types.attrs;
-        default = { Hour = 3; Minute = 15; };
-        description = lib.mdDoc "The time interval at which the garbage collector will run.";
+        type = launchdTypes.StartCalendarInterval;
+        default = [{ Weekday = 7; Hour = 3; Minute = 15; }];
+        description = ''
+          The calendar interval at which the garbage collector will run.
+          See the {option}`serviceConfig.StartCalendarInterval` option of
+          the {option}`launchd` module for more info.
+        '';
       };
 
       options = mkOption {
         default = "";
         example = "--max-freed $((64 * 1024**3))";
         type = types.str;
-        description = lib.mdDoc ''
+        description = ''
           Options given to {file}`nix-collect-garbage` when the
           garbage collector is run automatically.
         '';
@@ -57,15 +56,18 @@ in
 
   ###### implementation
 
-  config = mkIf cfg.automatic {
+  config = {
+    assertions = [
+      {
+        assertion = cfg.automatic -> config.nix.enable;
+        message = ''nix.gc.automatic requires nix.enable'';
+      }
+    ];
 
-    launchd.daemons.nix-gc = {
+    launchd.daemons.nix-gc = mkIf cfg.automatic {
       command = "${config.nix.package}/bin/nix-collect-garbage ${cfg.options}";
-      environment.NIX_REMOTE = optionalString config.nix.useDaemon "daemon";
       serviceConfig.RunAtLoad = false;
-      serviceConfig.StartCalendarInterval = [ cfg.interval ];
-      serviceConfig.UserName = cfg.user;
+      serviceConfig.StartCalendarInterval = cfg.interval;
     };
-
   };
 }

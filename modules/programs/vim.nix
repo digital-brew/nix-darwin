@@ -18,14 +18,14 @@ in
     programs.vim.enable = mkOption {
       type = types.bool;
       default = false;
-      description = lib.mdDoc "Whether to configure vim.";
+      description = "Whether to configure vim.";
     };
 
     programs.vim.enableSensible = mkOption {
       type = types.bool;
       default = false;
       example = true;
-      description = lib.mdDoc "Enable sensible configuration options for vim.";
+      description = "Enable sensible configuration options for vim.";
     };
 
     programs.vim.extraKnownPlugins = mkOption {
@@ -46,14 +46,14 @@ in
           };
         }
         '';
-      description = lib.mdDoc "Custom plugin declarations to add to VAM's knownPlugins.";
+      description = "Custom plugin declarations to add to VAM's knownPlugins.";
     };
 
     programs.vim.plugins = mkOption {
       type = types.listOf types.attrs;
       default = [];
       example = [ { names = [ "surround" "vim-nix" ]; } ];
-      description = lib.mdDoc "VAM plugin dictionaries to use for vim_configurable.";
+      description = "VAM plugin dictionaries to use for vim_configurable.";
     };
 
     programs.vim.package = mkOption {
@@ -70,14 +70,14 @@ in
     programs.vim.vimConfig = mkOption {
       type = types.lines;
       default = "";
-      description = lib.mdDoc "Extra vimrcConfig to use for vim_configurable.";
+      description = "Extra vimrcConfig to use for vim_configurable.";
     };
   };
 
   config = mkIf cfg.enable {
 
     environment.systemPackages =
-      [ # Include vim_configurable package.
+      [ # Include vim-full package.
         cfg.package
       ];
 
@@ -92,7 +92,7 @@ in
       endif
     '';
 
-    programs.vim.package = pkgs.vim_configurable.customize {
+    programs.vim.package = pkgs.vim-full.customize {
       name = "vim";
       vimrcConfig.customRC = config.environment.etc."vimrc".text;
       vimrcConfig.vam = {

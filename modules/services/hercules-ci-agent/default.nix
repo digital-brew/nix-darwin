@@ -17,15 +17,23 @@ in
     logFile = mkOption {
       type = types.path;
       default = "/var/log/hercules-ci-agent.log";
-      description = lib.mdDoc "Stdout and sterr of hercules-ci-agent process.";
+      description = "Stdout and sterr of hercules-ci-agent process.";
     };
   };
 
   config = mkIf cfg.enable {
+    # TODO: Upstream this to NixOS.
+    assertions = [
+      {
+        assertion = config.nix.enable;
+        message = ''`services.hercules-ci-agent.enable` requires `nix.enable`'';
+      }
+    ];
+
     launchd.daemons.hercules-ci-agent = {
       script = "exec ${cfg.package}/bin/hercules-ci-agent --config ${cfg.tomlFile}";
 
-      path = [ config.nix.package ];
+      path = [ config.nix.package config.environment.systemPath ];
       environment = {
         NIX_SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
       };
@@ -74,7 +82,7 @@ in
       darwin.label = config.system.darwinLabel;
       darwin.revision = config.system.darwinRevision;
       darwin.version = config.system.darwinVersion;
-      darwin.nix.daemon = config.nix.useDaemon;
+      darwin.nix.daemon = true;
       darwin.nix.sandbox = config.nix.settings.sandbox;
     };
   };

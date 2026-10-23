@@ -11,24 +11,25 @@ in
     services.skhd.enable = mkOption {
       type = types.bool;
       default = false;
-      description = lib.mdDoc "Whether to enable the skhd hotkey daemon.";
+      description = "Whether to enable the skhd hotkey daemon.";
     };
 
     services.skhd.package = mkOption {
       type = types.package;
       default = pkgs.skhd;
-      description = lib.mdDoc "This option specifies the skhd package to use.";
+      description = "This option specifies the skhd package to use.";
     };
 
     services.skhd.skhdConfig = mkOption {
       type = types.lines;
       default = "";
       example = "alt + shift - r   :   chunkc quit";
-      description = lib.mdDoc "Config to use for {file}`skhdrc`.";
+      description = "Config to use for {file}`skhdrc`.";
     };
   };
 
   config = mkIf cfg.enable {
+    environment.systemPackages = [ cfg.package ];
 
     environment.etc."skhdrc".text = cfg.skhdConfig;
 
@@ -39,6 +40,8 @@ in
         ++ optionals (cfg.skhdConfig != "") [ "-c" "/etc/skhdrc" ];
       serviceConfig.KeepAlive = true;
       serviceConfig.ProcessType = "Interactive";
+
+      managedBy = "services.skhd.enable";
     };
 
   };

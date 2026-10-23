@@ -1,30 +1,31 @@
-{ config, lib, pkgs, ... }:
-
-with lib;
+{ config, lib, ... }:
 
 let
   cfg = config.services.nix-daemon;
+
+  inherit (lib) mkRemovedOptionModule mkDefault mkIf mkMerge mkOption types;
 in
 
 {
-  options = {
-    services.nix-daemon.enable = mkOption {
-      type = types.bool;
-      default = false;
-      description = lib.mdDoc "Whether to enable the nix-daemon service.";
-    };
+  imports = [
+    (mkRemovedOptionModule [ "services" "nix-daemon" "enable" ] ''
+      nix-darwin now manages nix-daemon unconditionally when
+      `nix.enable` is on.
+    '')
+  ];
 
+  options = {
     services.nix-daemon.enableSocketListener = mkOption {
       type = types.bool;
       default = false;
-      description = lib.mdDoc "Whether to make the nix-daemon service socket activated.";
+      description = "Whether to make the nix-daemon service socket activated.";
     };
 
     services.nix-daemon.logFile = mkOption {
       type = types.nullOr types.path;
       default = null;
       example = "/var/log/nix-daemon.log";
-      description = lib.mdDoc ''
+      description = ''
         The logfile to use for the nix-daemon service. Alternatively
         {command}`sudo launchctl debug system/org.nixos.nix-daemon --stderr`
         can be used to stream the logs to a shell after restarting the service with
@@ -35,23 +36,18 @@ in
     services.nix-daemon.tempDir = mkOption {
       type = types.nullOr types.path;
       default = null;
-      description = lib.mdDoc "The TMPDIR to use for nix-daemon.";
+      description = "The TMPDIR to use for nix-daemon.";
     };
   };
 
-  config = mkIf cfg.enable {
-
-    nix.useDaemon = true;
+  config = mkIf config.nix.enable {
 
     launchd.daemons.nix-daemon = {
-      serviceConfig.ProgramArguments = [
-        "/bin/sh" "-c"
-        "/bin/wait4path ${config.nix.package}/bin/nix-daemon &amp;&amp; exec ${config.nix.package}/bin/nix-daemon"
-      ];
+      command = lib.getExe' config.nix.package "nix-daemon";
       serviceConfig.ProcessType = config.nix.daemonProcessType;
       serviceConfig.LowPriorityIO = config.nix.daemonIOLowPriority;
       serviceConfig.Label = "org.nixos.nix-daemon"; # must match daemon installed by Nix regardless of the launchd label Prefix
-      serviceConfig.SoftResourceLimits.NumberOfFiles = mkDefault 4096;
+      serviceConfig.SoftResourceLimits.NumberOfFiles = mkDefault 1048576;
       serviceConfig.StandardErrorPath = cfg.logFile;
 
       serviceConfig.KeepAlive = mkIf (!cfg.enableSocketListener) true;

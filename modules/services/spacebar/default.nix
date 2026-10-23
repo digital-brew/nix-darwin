@@ -22,12 +22,13 @@ in
     services.spacebar.enable = mkOption {
       type = bool;
       default = false;
-      description = lib.mdDoc "Whether to enable the spacebar spacebar.";
+      description = "Whether to enable the spacebar.";
     };
 
     services.spacebar.package = mkOption {
       type = path;
-      description = lib.mdDoc "The spacebar package to use.";
+      default = pkgs.spacebar;
+      description = "The spacebar package to use.";
     };
 
     services.spacebar.config = mkOption {
@@ -40,7 +41,7 @@ in
           foreground_color = "0xffa8a8a8";
         }
       '';
-      description = lib.mdDoc ''
+      description = ''
         Key/Value pairs to pass to spacebar's 'config' domain, via the configuration file.
       '';
     };
@@ -51,7 +52,7 @@ in
       example = literalExpression ''
         echo "spacebar config loaded..."
       '';
-      description = lib.mdDoc ''
+      description = ''
         Extra arbitrary configuration to append to the configuration file.
       '';
     };
@@ -69,6 +70,8 @@ in
       serviceConfig.EnvironmentVariables = {
         PATH = "${cfg.package}/bin:${config.environment.systemPath}";
       };
+
+      managedBy = "services.spacebar.enable";
     };
   };
 }

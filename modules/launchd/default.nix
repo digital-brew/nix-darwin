@@ -9,7 +9,7 @@ let
 
   toEnvironmentText = name: value: {
     name = "${value.serviceConfig.Label}.plist";
-    value.text = generators.toPlist { } value.serviceConfig;
+    value.text = generators.toPlist { escape = true; } value.serviceConfig;
   };
 
   launchdConfig = import ./launchd.nix;
@@ -20,7 +20,6 @@ let
     { config, name, ... }:
     let
 
-      cmd = config.command;
       env = config.environment // optionalAttrs (config.path != "") { PATH = config.path; };
 
     in
@@ -30,14 +29,14 @@ let
           type = types.attrsOf (types.either types.str (types.listOf types.str));
           default = {};
           example = { PATH = "/foo/bar/bin"; LANG = "nl_NL.UTF-8"; };
-          description = lib.mdDoc "Environment variables passed to the service's processes.";
+          description = "Environment variables passed to the service's processes.";
           apply = mapAttrs (n: v: if isList v then concatStringsSep ":" v else v);
         };
 
         path = mkOption {
           type = types.listOf (types.either types.path types.str);
           default = [];
-          description = lib.mdDoc ''
+          description = ''
             Packages added to the service's {env}`PATH`
             environment variable.  Only the {file}`bin`
             and subdirectories of each package is added.
@@ -48,13 +47,13 @@ let
         command = mkOption {
           type = types.either types.str types.path;
           default = "";
-          description = lib.mdDoc "Command executed as the service's main process.";
+          description = "Command executed as the service's main process.";
         };
 
         script = mkOption {
           type = types.lines;
           default = "";
-          description = lib.mdDoc "Shell commands executed as the service's main process.";
+          description = "Shell commands executed as the service's main process.";
         };
 
         # preStart = mkOption {
@@ -73,7 +72,7 @@ let
               KeepAlive = true;
             };
           default = {};
-          description = lib.mdDoc ''
+          description = ''
             Each attribute in this set specifies an option for a key in the plist.
             <https://developer.apple.com/legacy/library/documentation/Darwin/Reference/ManPages/man5/launchd.plist.5.html>
           '';
@@ -88,7 +87,11 @@ let
         '');
 
         serviceConfig.Label = mkDefault "${cfg.labelPrefix}.${name}";
-        serviceConfig.ProgramArguments = mkIf (cmd != "") [ "/bin/sh" "-c" "exec ${cmd}" ];
+        serviceConfig.ProgramArguments = mkIf (config.command != "") [
+          "/bin/sh"
+          "-c"
+          "/bin/wait4path /nix/store && exec ${config.command}"
+        ];
         serviceConfig.EnvironmentVariables = mkIf (env != {}) env;
       };
     };
@@ -99,7 +102,7 @@ in
     launchd.labelPrefix = mkOption {
       type = types.str;
       default = "org.nixos";
-      description = lib.mdDoc ''
+      description = ''
         The default prefix of the service label. Individual services can
         override this by setting the Label attribute.
       '';
@@ -109,7 +112,7 @@ in
       type = types.attrsOf (types.either types.str (types.listOf types.str));
       default = {};
       example = { LANG = "nl_NL.UTF-8"; };
-      description = lib.mdDoc ''
+      description = ''
         A set of environment variables to be set on all future
         processes launched by launchd in the caller's context.
         The value of each variable can be either a string or a list of
@@ -123,7 +126,7 @@ in
       type = types.attrsOf (types.either types.str (types.listOf types.str));
       default = {};
       example = { LANG = "nl_NL.UTF-8"; };
-      description = lib.mdDoc ''
+      description = ''
         A set of environment variables to be set on all future
         processes launched by launchd in the caller's context.
         The value of each variable can be either a string or a list of
@@ -136,7 +139,7 @@ in
     launchd.agents = mkOption {
       default = {};
       type = types.attrsOf (types.submodule serviceOptions);
-      description = lib.mdDoc ''
+      description = ''
         Definition of per-user launchd agents.
 
         When a user logs in, a per-user launchd is started.
@@ -152,7 +155,7 @@ in
     launchd.daemons = mkOption {
       default = {};
       type = types.attrsOf (types.submodule serviceOptions);
-      description = lib.mdDoc ''
+      description = ''
         Definition of launchd daemons.
 
         After the system is booted and the kernel is running, launchd is run to finish the system initialization.
@@ -167,8 +170,17 @@ in
 
     launchd.user.agents = mkOption {
       default = {};
-      type = types.attrsOf (types.submodule serviceOptions);
-      description = lib.mdDoc ''
+      type = types.attrsOf (types.submodule [
+        serviceOptions
+        ({ name, ... }: {
+          options.managedBy = lib.mkOption {
+            type = lib.types.str;
+            internal = true;
+            default = lib.showOption [ "launchd" "user" "agents" name ];
+          };
+        })
+      ]);
+      description = ''
         Definition of per-user launchd agents.
 
         When a user logs in, a per-user launchd is started.
@@ -183,6 +195,18 @@ in
   };
 
   config = {
+
+    system.requiresPrimaryUser =
+      lib.map (
+        name:
+        lib.showOption [
+          "launchd"
+          "user"
+          "envVariables"
+          name
+        ]
+      ) (attrNames cfg.user.envVariables)
+      ++ lib.map ({ managedBy, ... }: managedBy) (attrValues cfg.user.agents);
 
     environment.launchAgents = mapAttrs' toEnvironmentText cfg.agents;
     environment.launchDaemons = mapAttrs' toEnvironmentText cfg.daemons;

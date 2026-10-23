@@ -11,7 +11,7 @@ let
   failedAssertions = map (x: x.message) (filter (x: !x.assertion) config.assertions);
 
   throwAssertions = res: if (failedAssertions != []) then throw "\nFailed assertions:\n${concatStringsSep "\n" (map (x: "- ${x}") failedAssertions)}" else res;
-  showWarnings = res: fold (w: x: builtins.trace "[1;31mwarning: ${w}[0m" x) res config.warnings;
+  showWarnings = res: foldr (w: x: builtins.trace "[1;31mwarning: ${w}[0m" x) res config.warnings;
 
 in
 
@@ -20,25 +20,17 @@ in
 
     system.build = mkOption {
       internal = true;
-      type = types.attrsOf types.unspecified;
+      type = types.lazyAttrsOf types.unspecified;
       default = {};
-      description = lib.mdDoc ''
+      description = ''
         Attribute set of derivation used to setup the system.
-      '';
-    };
-
-    system.path = mkOption {
-      internal = true;
-      type = types.package;
-      description = lib.mdDoc ''
-        The packages you want in the system environment.
       '';
     };
 
     system.profile = mkOption {
       type = types.path;
       default = "/nix/var/nix/profiles/system";
-      description = lib.mdDoc ''
+      description = ''
         Profile to use for the system.
       '';
     };
@@ -56,7 +48,7 @@ in
       internal = true;
       type = types.attrsOf types.unspecified;
       default = {};
-      description = lib.mdDoc ''
+      description = ''
         `lib.mkDerivation` attributes that will be passed to the top level system builder.
       '';
     };
@@ -66,7 +58,7 @@ in
       internal = true;
       default = [];
       example = [ { assertion = false; message = "you can't enable this for that reason"; } ];
-      description = lib.mdDoc ''
+      description = ''
         This option allows modules to express conditions that must
         hold for the evaluation of the system configuration to
         succeed, along with associated error messages for the user.
@@ -78,7 +70,7 @@ in
       default = [];
       type = types.listOf types.str;
       example = [ "The `foo' service is deprecated and will go away soon!" ];
-      description = lib.mdDoc ''
+      description = ''
         This option allows modules to show warnings to users during
         the evaluation of the system configuration.
       '';
@@ -92,8 +84,54 @@ in
       name = "darwin-system-${cfg.darwinLabel}";
       preferLocalBuild = true;
 
+      nativeBuildInputs = [ pkgs.shellcheck ];
+
       activationScript = cfg.activationScripts.script.text;
-      activationUserScript = cfg.activationScripts.userScript.text;
+
+      # This is for compatibility with older `darwin-rebuild`s and
+      # third‐party deployment tools.
+      #
+      # TODO: Remove this in 25.11.
+      activationUserScript = ''
+        #! ${pkgs.stdenv.shell}
+        # nix-darwin: deprecated
+
+        # Hack to handle upgrades.
+        if
+          [[ -e /run/current-system/activate-user ]] \
+          && ! grep -q '^# nix-darwin: deprecated$' \
+            /run/current-system/activate-user
+        then
+          exit
+        fi
+
+        printf >&2 '\e[1;31mwarning: `activate-user` is deprecated and will be removed in 25.11\e[0m\n'
+        printf >&2 'This is usually due to the use of a non‐standard activation/deployment\n'
+        printf >&2 'tool. If you maintain one of these tools, our advice is:\n'
+        printf >&2 '\n'
+        printf >&2 '  You can identify a post‐user‐activation configuration by the absence\n'
+        printf >&2 '  of `activate-user` or the second line of the script being\n'
+        printf >&2 '  `# nix-darwin: deprecated`.\n'
+        printf >&2 '\n'
+        printf >&2 '  We recommend running `$systemConfig/sw/bin/darwin-rebuild activate`\n'
+        printf >&2 '  to activate built configurations; for a pre‐user‐activation\n'
+        printf >&2 '  configuration this should be run as a normal user, and for a\n'
+        printf >&2 '  post‐user‐activation configuration it should be run as `root`.\n'
+        printf >&2 '\n'
+        printf >&2 '  If you can’t or don’t want to use `darwin-rebuild activate`, then you\n'
+        printf >&2 '  should skip running `activate-user` for post‐user‐activation\n'
+        printf >&2 '  configurations and continue running `activate` as `root`.\n'
+        printf >&2 '\n'
+        printf >&2 '  In 25.11, `darwin-rebuild` will stop running `activate-user` and this\n'
+        printf >&2 '  transition script will be deleted; you should be able to safely\n'
+        printf >&2 '  remove all related logic by then.\n'
+        printf >&2 '\n'
+        printf >&2 'Otherwise, you should report this to the deployment tool developers. If\n'
+        printf >&2 'you don’t use a third‐party deployment tool, please open a bug report\n'
+        printf >&2 'at <https://github.com/nix-darwin/nix-darwin/issues/new> and include as much\n'
+        printf >&2 'detail about your setup as possible.\n'
+      '';
+
       inherit (cfg) darwinLabel;
 
       darwinVersionJson = (pkgs.formats.json {}).generate "darwin-version.json" (
@@ -129,9 +167,13 @@ in
         unset activationScript
 
         echo "$activationUserScript" > $out/activate-user
-        substituteInPlace $out/activate-user --subst-var out
         chmod u+x $out/activate-user
         unset activationUserScript
+
+        # We exclude the warnings for `…` in single‐quote strings and
+        # non‐ASCII quotation marks as they are noisy and lead to a lot
+        # of false positives in our user‐facing output:
+        shellcheck --exclude=SC2016,SC1112 $out/activate $out/activate-user
 
         echo -n "$systemConfig" > $out/systemConfig
 

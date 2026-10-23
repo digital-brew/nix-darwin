@@ -41,52 +41,59 @@ in
 {
   imports = [
     (mkRenamedOptionModule [ "programs" "tmux" "tmuxConfig" ] [ "programs" "tmux" "extraConfig" ])
+    (mkRemovedOptionModule [ "programs" "tmux" "defaultCommand" ] "Use `programs.tmux.extraConfig` to configure the default command instead. If unset, tmux will default to using your system configured login shell.")
   ];
   options = {
     programs.tmux.enable = mkOption {
       type = types.bool;
       default = false;
-      description = lib.mdDoc "Whether to configure tmux.";
+      description = "Whether to configure tmux.";
     };
 
     programs.tmux.enableSensible = mkOption {
       type = types.bool;
       default = false;
       example = true;
-      description = lib.mdDoc "Enable sensible configuration options for tmux.";
+      description = "Enable sensible configuration options for tmux.";
+    };
+
+    programs.tmux.reverseSplitBindings = mkOption {
+      type = types.bool;
+      default = config.system.stateVersion <= 6 && cfg.enableSensible;
+      defaultText = literalExpression "config.system.stateVersion <= 6 && config.programs.tmux.enableSensible";
+      example = true;
+      description = ''
+        Whether to reverse the `%` and `"` split-window key bindings
+        emitted by the tmux module.
+      '';
     };
 
     programs.tmux.enableMouse = mkOption {
       type = types.bool;
       default = false;
       example = true;
-      description = lib.mdDoc "Enable mouse support for tmux.";
+      description = "Enable mouse support for tmux.";
     };
 
     programs.tmux.enableFzf = mkOption {
       type = types.bool;
       default = false;
       example = true;
-      description = lib.mdDoc "Enable fzf keybindings for selecting tmux sessions and panes.";
+      description = "Enable fzf keybindings for selecting tmux sessions and panes.";
     };
 
     programs.tmux.enableVim = mkOption {
       type = types.bool;
       default = false;
       example = true;
-      description = lib.mdDoc "Enable vim style keybindings for copy mode, and navigation of tmux panes.";
+      description = "Enable vim style keybindings for copy mode, and navigation of tmux panes.";
     };
 
     programs.tmux.iTerm2 = mkOption {
       type = types.bool;
       default = false;
       example = true;
-      description = lib.mdDoc "Cater to iTerm2 and its tmux integration, as appropriate.";
-    };
-
-    programs.tmux.defaultCommand = mkOption {
-      type = types.either types.str types.package;
-      description = lib.mdDoc "The default command to use for tmux panes.";
+      description = "Cater to iTerm2 and its tmux integration, as appropriate.";
     };
 
     programs.tmux.tmuxOptions = mkOption {
@@ -98,7 +105,7 @@ in
     programs.tmux.extraConfig = mkOption {
       type = types.lines;
       default = "";
-      description = lib.mdDoc "Extra configuration to add to {file}`tmux.conf`.";
+      description = "Extra configuration to add to {file}`tmux.conf`.";
     };
   };
 
@@ -120,12 +127,6 @@ in
       source-file -q /etc/tmux.conf.local
     '';
 
-    programs.tmux.defaultCommand = mkDefault config.environment.loginShell;
-
-    programs.tmux.tmuxOptions.login-shell.text = ''
-      set -g default-command "${cfg.defaultCommand}"
-    '';
-
     programs.tmux.tmuxOptions.sensible.text = mkIf cfg.enableSensible ''
       set -g default-terminal "screen-256color"
       setw -g aggressive-resize on
@@ -137,8 +138,6 @@ in
       set -s escape-time 0
 
       bind c new-window -c '#{pane_current_path}'
-      bind % split-window -v -c '#{pane_current_path}'
-      bind '"' split-window -h -c '#{pane_current_path}'
 
       # TODO: make these interactive
       bind C new-session
@@ -146,6 +145,11 @@ in
 
       # set -g status-utf8 on
       # set -g utf8 on
+    '';
+
+    programs.tmux.tmuxOptions.splitBindings.text = mkIf cfg.reverseSplitBindings ''
+      bind % split-window -v -c '#{pane_current_path}'
+      bind '"' split-window -h -c '#{pane_current_path}'
     '';
 
     programs.tmux.tmuxOptions.mouse.text = mkIf cfg.enableMouse ''
@@ -171,9 +175,9 @@ in
 
       bind-key -T copy-mode-vi p send-keys -X copy-pipe-and-cancel "tmux paste-buffer"
       bind-key -T copy-mode-vi v send-keys -X begin-selection
-    '' + optionalString stdenv.isLinux ''
+    '' + optionalString stdenv.hostPlatform.isLinux ''
       bind-key -T copy-mode-vi y send-keys -X copy-selection-and-cancel
-    '' + optionalString stdenv.isDarwin ''
+    '' + optionalString stdenv.hostPlatform.isDarwin ''
       bind-key -T copy-mode-vi y send-keys -X copy-pipe-and-cancel "pbcopy"
     '');
 

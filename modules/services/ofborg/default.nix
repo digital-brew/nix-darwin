@@ -12,13 +12,13 @@ in
     services.ofborg.enable = mkOption {
       type = types.bool;
       default = false;
-      description = lib.mdDoc "Whether to enable the ofborg builder service.";
+      description = "Whether to enable the ofborg builder service.";
     };
 
     services.ofborg.package = mkOption {
       type = types.package;
       example = literalExpression "pkgs.ofborg";
-      description = lib.mdDoc ''
+      description = ''
         This option specifies the ofborg package to use. eg.
 
         (import &lt;ofborg&gt; {}).ofborg.rs
@@ -30,7 +30,7 @@ in
 
     services.ofborg.configFile = mkOption {
       type = types.path;
-      description = lib.mdDoc ''
+      description = ''
         Configuration file to use for ofborg.
 
         WARNING Don't use a path literal or derivation for this,
@@ -41,15 +41,16 @@ in
     services.ofborg.logFile = mkOption {
       type = types.path;
       default = "/var/log/ofborg.log";
-      description = lib.mdDoc "The logfile to use for the ofborg service.";
+      description = "The logfile to use for the ofborg service.";
     };
   };
 
   config = mkIf cfg.enable {
-
     assertions = [
-      { assertion = elem "ofborg" config.users.knownGroups; message = "set users.knownGroups to enable ofborg group"; }
-      { assertion = elem "ofborg" config.users.knownUsers; message = "set users.knownUsers to enable ofborg user"; }
+      {
+        assertion = config.nix.enable;
+        message = ''`services.ofborg.enable` requires `nix.enable`'';
+      }
     ];
 
     warnings = mkIf (isDerivation cfg.configFile) [
@@ -87,8 +88,12 @@ in
     users.users.ofborg.shell = "/bin/bash";
     users.users.ofborg.description = "OfBorg service user";
 
+    users.knownUsers = [ "ofborg" ];
+
     users.groups.ofborg.gid = mkDefault 531;
     users.groups.ofborg.description = "Nix group for OfBorg service";
+
+    users.knownGroups = [ "ofborg" ];
 
     # FIXME: create logfiles automatically if defined.
     system.activationScripts.preActivation.text = ''
